@@ -8,6 +8,29 @@ const FuzzyMatchingApp = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [minScore, setMinScore] = useState(0.6);
 
+  // Expanded cross-domain keyword library
+  const categoryLibraries: Record<string, string[]> = {
+    fish: ['fish','salmon','tuna','cod','mackerel','sardine','herring','trout','bass','tilapia','catfish','halibut','snapper','grouper','swordfish','anchovy','carp','perch','pike','seafood','fillet','haddock','pollock','mahi','sole','flounder','mullet'],
+    shellfish: ['shrimp','prawn','lobster','crab','crayfish','oyster','mussel','clam','scallop','squid','octopus','shellfish','crustacean','mollusc'],
+    meat: ['meat','beef','pork','chicken','lamb','mutton','veal','poultry','turkey','duck','goose','venison','bacon','ham','sausage','steak','mince','chop','cutlet','breast','thigh','wing'],
+    dairy: ['milk','cheese','butter','cream','yogurt','dairy','cheddar','mozzarella','parmesan','whey','casein','lactose','buttermilk','ghee','paneer','gouda','brie','feta','ricotta','cottage cheese','sour cream'],
+    fruits: ['apple','banana','orange','grape','strawberry','mango','pineapple','watermelon','melon','berry','cherry','peach','pear','plum','fruit','lemon','lime','grapefruit','kiwi','papaya','guava','passion fruit','blueberry','raspberry','blackberry','cranberry','apricot','fig','date'],
+    vegetables: ['tomato','potato','onion','carrot','lettuce','cabbage','broccoli','cauliflower','spinach','pepper','cucumber','vegetable','garlic','celery','zucchini','eggplant','pumpkin','squash','asparagus','beet','radish','turnip','kale','chard','leek','shallot'],
+    grains: ['wheat','rice','corn','barley','oats','rye','grain','cereal','flour','meal','quinoa','millet','sorghum','bulgur','couscous','semolina','bran','germ','maize'],
+    nuts: ['almond','walnut','cashew','peanut','pecan','pistachio','hazelnut','macadamia','brazil nut','pine nut','chestnut','nut'],
+    oils: ['oil','olive oil','vegetable oil','coconut oil','palm oil','sunflower oil','canola oil','sesame oil','soybean oil','corn oil','peanut oil'],
+    spices: ['pepper','salt','cinnamon','turmeric','cumin','coriander','cardamom','clove','nutmeg','ginger','garlic powder','paprika','chili','cayenne','oregano','basil','thyme','rosemary','sage','spice','seasoning'],
+    textiles: ['cotton','wool','silk','linen','polyester','fabric','textile','cloth','yarn','fiber','fibre','thread','woven','knitted','nylon','rayon','acrylic','denim','canvas','velvet','satin'],
+    leather: ['leather','hide','skin','suede','cowhide','sheepskin','pigskin'],
+    metals: ['iron','steel','aluminum','aluminium','copper','brass','bronze','metal','alloy','zinc','nickel','tin','lead','gold','silver','platinum'],
+    plastics: ['plastic','polymer','resin','pvc','polyethylene','polypropylene','polystyrene','acrylic','nylon','teflon'],
+    wood: ['wood','timber','lumber','oak','pine','maple','mahogany','teak','cedar','birch','walnut','plywood','hardwood','softwood'],
+    chemicals: ['acid','alkali','solvent','alcohol','ether','ester','chemical','compound','element','reagent','catalyst'],
+    beverages: ['wine','beer','spirits','juice','coffee','tea','soda','beverage','drink','water','whiskey','vodka','rum','gin','brandy'],
+    machinery: ['machine','engine','motor','pump','compressor','turbine','generator','equipment','apparatus','device','tool','instrument'],
+    electronics: ['electronic','computer','phone','tablet','monitor','screen','display','circuit','semiconductor','transistor','chip','processor']
+  };
+
   // Fuzzy matching utilities
   const levenshteinDistance = (str1, str2) => {
     const matrix = [];
@@ -47,29 +70,49 @@ const FuzzyMatchingApp = () => {
       .filter(word => word.length > 2 && !stopWords.has(word));
   };
 
-  const calculateKeywordScore = (inventoryKeywords, tariffKeywords) => {
+  const checkCategoryMatch = (keywords: string[]): string[] => {
+    const matched = new Set<string>();
+    for (const [category, terms] of Object.entries(categoryLibraries)) {
+      for (const kw of keywords) {
+        const k = kw.toLowerCase();
+        if (terms.some(term => {
+          const t = term.toLowerCase();
+          // substring proximity or small edit distance
+          const d = levenshteinDistance(k, t);
+          const maxLen = Math.max(k.length, t.length) || 1;
+          return k.includes(t) || t.includes(k) || (d / maxLen <= 0.3) || d <= 2;
+        })) { matched.add(category); break; }
+      }
+    }
+    return Array.from(matched);
+  };
+
+  const calculateKeywordScore = (inventoryKeywords, tariffKeywords, inventoryCategories: string[]) => {
     if (inventoryKeywords.length === 0 || tariffKeywords.length === 0) return 0;
     
     let matches = 0;
     let partialMatches = 0;
     
+    const tariffCategories = checkCategoryMatch(tariffKeywords);
+    const categoryOverlap = inventoryCategories.filter(c => tariffCategories.includes(c)).length;
+    const categoryBonus = categoryOverlap * 0.3; // modest boost per overlap
+
     for (const invWord of inventoryKeywords) {
+      let bestWord = 0;
       for (const tarWord of tariffKeywords) {
-        if (invWord === tarWord) {
-          matches++;
-        } else if (invWord.includes(tarWord) || tarWord.includes(invWord)) {
-          partialMatches += 0.5;
-        } else {
+        if (invWord === tarWord) bestWord = Math.max(bestWord, 1);
+        else if (invWord.includes(tarWord) || tarWord.includes(invWord)) bestWord = Math.max(bestWord, 0.5);
+        else {
           const distance = levenshteinDistance(invWord, tarWord);
           const maxLen = Math.max(invWord.length, tarWord.length);
-          if (distance / maxLen <= 0.3) {
-            partialMatches += 0.7;
-          }
+          if (maxLen > 0 && distance / maxLen <= 0.3) bestWord = Math.max(bestWord, 0.7);
         }
       }
+      if (bestWord >= 1) matches++; else if (bestWord > 0) partialMatches += bestWord;
     }
     
-    return (matches + partialMatches) / Math.max(inventoryKeywords.length, tariffKeywords.length);
+    const base = (matches + partialMatches) / Math.max(inventoryKeywords.length, tariffKeywords.length);
+    return Math.min(1, base + categoryBonus);
   };
 
   const calculateSimilarityScore = (str1, str2) => {
@@ -86,6 +129,7 @@ const FuzzyMatchingApp = () => {
 
   const findBestMatch = (inventoryItem) => {
     const inventoryKeywords = extractKeywords(inventoryItem.name);
+    const inventoryCategories = checkCategoryMatch(inventoryKeywords);
     let bestMatch = null;
     let bestScore = 0;
 
@@ -93,7 +137,7 @@ const FuzzyMatchingApp = () => {
       const tariffKeywords = extractKeywords(tariffItem.description);
       
       // Calculate different similarity scores
-      const keywordScore = calculateKeywordScore(inventoryKeywords, tariffKeywords);
+      const keywordScore = calculateKeywordScore(inventoryKeywords, tariffKeywords, inventoryCategories);
       const stringScore = calculateSimilarityScore(inventoryItem.name, tariffItem.description);
       
       // Weight the scores (keyword matching is more important for this use case)
