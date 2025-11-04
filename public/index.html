@@ -30,6 +30,9 @@ const App = () => {
   const [minScore, setMinScore] = useState(0.6);
   const [processing, setProcessing] = useState(false);
   const [tariffDebug, setTariffDebug] = useState({ headers: [], mapping: { description:'', hsCode:'' }, count: 0 });
+  const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const [tariffCache, setTariffCache] = useState([]); // {desc, hsCode, kw}
+  const [invIndex, setInvIndex] = useState(new Map()); // term -> Set of tariff idx
 
   const onInventoryFile = (e)=>{const f=e.target.files?.[0]; if(!f) return; const reader=new FileReader(); reader.onload=(ev)=>{const txt=String(ev.target.result||''); const { rows } = parseCsv(txt); setInventory(rows);}; reader.readAsText(f);};
   const onTariffFile = (e)=>{const f=e.target.files?.[0]; if(!f) return; const reader=new FileReader(); reader.onload=(ev)=>{const txt=String(ev.target.result||''); const { headers, rows } = parseCsv(txt);
@@ -43,32 +46,61 @@ const App = () => {
     const mapped = rows.map(r=>({ description: String(r[descKey]||'').trim(), hsCode: String(r[hsKey]||'').trim() })).filter(x=>x.description);
     setTariff(mapped);
     setTariffDebug({ headers: headersArr, mapping:{ description: descKey, hsCode: hsKey }, count: mapped.length });
+
+    // Build cache and inverted index for fast lookups
+    const cache = mapped.map((t)=>({ desc: t.description, hsCode: t.hsCode, kw: extractKeywords(t.description) }));
+    const index = new Map(); // term -> Set(idx)
+    cache.forEach((t,i)=>{
+      const seen = new Set();
+      t.kw.forEach(term=>{ if(seen.has(term)) return; seen.add(term); const set=index.get(term) || new Set(); set.add(i); index.set(term,set); });
+    });
+    setTariffCache(cache);
+    setInvIndex(index);
   }; reader.readAsText(f);};
 
   const findBestMatch = useCallback((item)=>{
     const name = item.name || item.product_name || item.item_name || '';
     const invKw = extractKeywords(name);
     const invCats = checkCategoryMatch(invKw);
+    // shortlist using inverted index term frequency
+    const candidateScores = new Map();
+    invKw.forEach(term=>{
+      const set = invIndex.get(term);
+      if(!set) return;
+      set.forEach(idx=>{ candidateScores.set(idx, (candidateScores.get(idx)||0)+1); });
+    });
+    const shortlistIdx = Array.from(candidateScores.entries()).sort((a,b)=>b[1]-a[1]).slice(0,150).map(([idx])=>idx);
+    const pool = shortlistIdx.length>0 ? shortlistIdx.map(i=>tariffCache[i]) : tariffCache;
     let best=null, bestScore=0;
-    for(const t of tariff){
-      const desc = t.description || t.Description || '';
-      if(!desc) continue;
-      const tarKw = extractKeywords(desc);
+    for(const t of pool){
+      const tarKw = t.kw;
       const kScore = calcKeywordScore(invKw, tarKw, invCats);
-      const sScore = calcStringScore(name, desc);
+      const sScore = calcStringScore(name, t.desc);
       const score = kScore*0.7 + sScore*0.3;
-      if(score>bestScore && score>=minScore){ bestScore=score; best={ description: desc, hsCode: t.hsCode || t['HS Code'] || t['hs code'] || '', score }; }
+      if(score>bestScore && score>=minScore){ bestScore=score; best={ description: t.desc, hsCode: t.hsCode || '', score }; }
     }
     return best;
-  },[tariff,minScore]);
+  },[tariffCache, invIndex, minScore]);
 
   const onStart = ()=>{
     if(!tariff.length || !inventory.length) return;
     setProcessing(true);
-    setTimeout(()=>{
-      const res = inventory.map(it=>{const m=findBestMatch(it); return { inventory: it, match: m, status: m?'matched':'unmatched' }; });
-      setMatches(res); setProcessing(false);
-    }, 50);
+    setProgress({ current: 0, total: inventory.length });
+    const batchSize = 100;
+    const out = new Array(inventory.length);
+    let i = 0;
+    const step = ()=>{
+      const end = Math.min(i+batchSize, inventory.length);
+      for(let k=i;k<end;k++){
+        const it = inventory[k];
+        const m = findBestMatch(it);
+        out[k] = { inventory: it, match: m, status: m?'matched':'unmatched' };
+      }
+      i = end;
+      setProgress({ current: i, total: inventory.length });
+      if(i < inventory.length){ setTimeout(step, 0); } else { setMatches(out); setProcessing(false); }
+    };
+    setTimeout(step, 0);
   };
 
   const exportCsv = ()=>{
@@ -108,7 +140,7 @@ const App = () => {
               <input type='range' min='0.1' max='1' step='0.1' value={minScore} onChange={e=>setMinScore(parseFloat(e.target.value))} className='w-32' />
               <span className='text-sm text-gray-600'>{(minScore*100).toFixed(0)}%</span>
             </div>
-            <button onClick={onStart} disabled={!ready||processing} className={`px-6 py-2 rounded text-white ${ready&&!processing?'bg-blue-600 hover:bg-blue-700':'bg-gray-400 cursor-not-allowed'}`}>{processing?'Processing...':'Start Matching'}</button>
+            <button onClick={onStart} disabled={!ready||processing} className={`px-6 py-2 rounded text-white ${ready&&!processing?'bg-blue-600 hover:bg-blue-700':'bg-gray-400 cursor-not-allowed'}`}>{processing?`Processing ${progress.current}/${progress.total}...`:'Start Matching'}</button>
             {matches.length>0 && (<button onClick={exportCsv} className='px-6 py-2 rounded text-white bg-indigo-600 hover:bg-indigo-700'>Export Results</button>)}
           </div>
         </div>
