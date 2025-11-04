@@ -30,11 +30,13 @@ const App = () => {
   const [minScore, setMinScore] = useState(0.6);
   const [processing, setProcessing] = useState(false);
   const [tariffDebug, setTariffDebug] = useState({ headers: [], mapping: { description:'', hsCode:'' }, count: 0 });
+  const [inventoryDebug, setInventoryDebug] = useState({ headers: [], mapping: { name:'' }, count: 0 });
+  const [nameKey, setNameKey] = useState('');
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const [tariffCache, setTariffCache] = useState([]); // {desc, hsCode, kw}
   const [invIndex, setInvIndex] = useState(new Map()); // term -> Set of tariff idx
 
-  const onInventoryFile = (e)=>{const f=e.target.files?.[0]; if(!f) return; const reader=new FileReader(); reader.onload=(ev)=>{const txt=String(ev.target.result||''); const { rows } = parseCsv(txt); setInventory(rows);}; reader.readAsText(f);};
+  const onInventoryFile = (e)=>{const f=e.target.files?.[0]; if(!f) return; const reader=new FileReader(); reader.onload=(ev)=>{const txt=String(ev.target.result||''); const { headers, rows } = parseCsv(txt); const findCol=(patterns)=> headers.find(h=>patterns.some(p=>h.includes(p))) || ''; const detected = findCol(['name','product','item','title','description','inventory','desc']); if(!detected){ alert('Could not detect item name column in Inventory CSV. Please include a name/product/item column.'); setInventory([]); setInventoryDebug({ headers, mapping:{ name:'' }, count: 0 }); setNameKey(''); return; } setNameKey(detected); setInventory(rows); setInventoryDebug({ headers, mapping:{ name: detected }, count: rows.length });}; reader.readAsText(f);};
   const onTariffFile = (e)=>{const f=e.target.files?.[0]; if(!f) return; const reader=new FileReader(); reader.onload=(ev)=>{const txt=String(ev.target.result||''); const { headers, rows } = parseCsv(txt);
     const findCol=(patterns)=>{const idx=headers.findIndex(h=>patterns.some(p=>h.includes(p)));return idx};
     const descIdx = findCol(['description','product','commodity','item','goods','desc']);
@@ -59,7 +61,7 @@ const App = () => {
   }; reader.readAsText(f);};
 
   const findBestMatch = useCallback((item)=>{
-    const name = item.name || item.product_name || item.item_name || '';
+    const name = (nameKey && item[nameKey]) || item.name || item.product_name || item.item_name || '';
     const invKw = extractKeywords(name);
     const invCats = checkCategoryMatch(invKw);
     // shortlist using inverted index term frequency
@@ -80,7 +82,7 @@ const App = () => {
       if(score>bestScore && score>=minScore){ bestScore=score; best={ description: t.desc, hsCode: t.hsCode || '', score }; }
     }
     return best;
-  },[tariffCache, invIndex, minScore]);
+  },[tariffCache, invIndex, minScore, nameKey]);
 
   const onStart = ()=>{
     if(!tariff.length || !inventory.length) return;
@@ -105,7 +107,7 @@ const App = () => {
 
   const exportCsv = ()=>{
     const header=['Inventory Name','Matched Description','HS Code','Score','Status'];
-    const rows=matches.map(m=>[m.inventory.name||m.inventory.product_name||m.inventory.item_name||'', m.match?.description||'No match found', m.match?.hsCode||'', m.match?`${(m.match.score*100).toFixed(1)}%`:'0%', m.status]);
+    const rows=matches.map(m=>[((nameKey && m.inventory[nameKey])||m.inventory.name||m.inventory.product_name||m.inventory.item_name||''), m.match?.description||'No match found', m.match?.hsCode||'', m.match?`${(m.match.score*100).toFixed(1)}%`:'0%', m.status]);
     const csv=[header,...rows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
     const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='matching_results.csv'; a.click(); URL.revokeObjectURL(url);
   };
@@ -131,6 +133,9 @@ const App = () => {
               <div className='text-sm text-gray-700 mb-2'>Inventory CSV</div>
               <input type='file' accept='.csv' onChange={onInventoryFile} />
               {inventory.length>0 && <div className='text-green-600 font-medium mt-2'>✓ {inventory.length} items loaded</div>}
+              {inventoryDebug.count>0 && (
+                <div className='text-xs text-gray-500 mt-2'>Using: {inventoryDebug.mapping.name}</div>
+              )}
             </div>
           </div>
 
