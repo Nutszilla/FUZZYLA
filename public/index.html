@@ -30,9 +30,8 @@ const App = () => {
   const [minScore, setMinScore] = useState(0.6);
   const [processing, setProcessing] = useState(false);
 
-  useEffect(()=>{fetch('/tariff.json').then(r=>r.json()).then(setTariff).catch(()=>setTariff([]));},[]);
-
   const onInventoryFile = (e)=>{const f=e.target.files?.[0]; if(!f) return; const reader=new FileReader(); reader.onload=(ev)=>{const txt=String(ev.target.result||''); setInventory(parseCsv(txt));}; reader.readAsText(f);};
+  const onTariffFile = (e)=>{const f=e.target.files?.[0]; if(!f) return; const reader=new FileReader(); reader.onload=(ev)=>{const txt=String(ev.target.result||''); const rows=parseCsv(txt); const mapped=rows.map(r=>({ description: r.description||r.product||r.commodity||r.item||r.goods||r.desc||r['description']||r['Description']||r['DESC']||'', hsCode: r['hs code']||r.hs_code||r.hscode||r.code||r['HS Code']||r['HSCODE']||r['Code']||''})).filter(x=>x.description); setTariff(mapped);}; reader.readAsText(f);};
 
   const findBestMatch = useCallback((item)=>{
     const name = item.name || item.product_name || item.item_name || '';
@@ -74,11 +73,12 @@ const App = () => {
       <div className='max-w-6xl mx-auto'>
         <div className='bg-white rounded-lg shadow-lg p-6 mb-6'>
           <h1 className='text-3xl font-bold text-gray-800 mb-2'>Inventory to Tariff Fuzzy Matching</h1>
-          <p className='text-gray-600'>Tariff is preloaded; upload only inventory CSV.</p>
+          <p className='text-gray-600'>Upload both files: Tariff CSV and Inventory CSV.</p>
           <div className='grid md:grid-cols-2 gap-6 mt-4'>
             <div className='border-2 border-dashed border-gray-300 rounded-lg p-6 text-center'>
-              <div className='text-sm text-gray-700 mb-2'>Tariff data</div>
-              <div className='text-green-600 font-medium'>{tariff.length?`✓ ${tariff.length} rows loaded`:'Loading...'}</div>
+              <div className='text-sm text-gray-700 mb-2'>Tariff CSV</div>
+              <input type='file' accept='.csv' onChange={onTariffFile} />
+              {tariff.length>0 && <div className='text-green-600 font-medium mt-2'>✓ {tariff.length} rows loaded</div>}
             </div>
             <div className='border-2 border-dashed border-gray-300 rounded-lg p-6 text-center'>
               <div className='text-sm text-gray-700 mb-2'>Inventory CSV</div>
