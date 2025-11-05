@@ -1,9 +1,10 @@
-<!DOCTYPE html><html><head><title>Food HS Classifier</title><meta charset='utf-8'/><meta name='viewport' content='width=device-width, initial-scale=1'/><script src='https://unpkg.com/react@18/umd/react.development.js'></script><script src='https://unpkg.com/react-dom@18/umd/react-dom.development.js'></script><script src='https://unpkg.com/@babel/standalone/babel.min.js'></script><script src='https://cdn.tailwindcss.com'></script></head><body><div id='root'></div><script type='text/babel'>
+<!DOCTYPE html><html><head><title>Food HS Classifier</title><meta charset='utf-8'/><meta name='viewport' content='width=device-width, initial-scale=1'/><script src='https://unpkg.com/react@18/umd/react.development.js'></script><script src='https://unpkg.com/react-dom@18/umd/react-dom.development.js'></script><script src='https://unpkg.com/@babel/standalone/babel.min.js'></script><script src='https://cdn.tailwindcss.com'></script><script src='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'></script></head><body><div id='root'></div><script type='text/babel'>
 const { useState, useEffect, useCallback } = React;
 
 // Utils
 const normalize = s => String(s||'').toLowerCase().replace(/[^\w\s]/g,' ').replace(/\s+/g,' ').trim();
 const parseCsv = (text)=>{const lines=text.split(/\r?\n/).filter(l=>l.trim());if(!lines.length) return { headers:[], rows:[] };const tryDelims=[',',';','\t','|'];let bestDelim=',';let maxCols=0;for(const d of tryDelims){const cols=(lines[0].match(new RegExp(d==='\t'?'\t':d,'g'))||[]).length+1;if(cols>maxCols){maxCols=cols;bestDelim=d;}}const splitLine=(line)=>{const out=[];let cur='';let q=false;for(let i=0;i<line.length;i++){const c=line[i];if(c==='"'){if(q && line[i+1]==='"'){cur+='"';i++;}else{q=!q;}}else if(c===bestDelim && !q){out.push(cur);cur='';}else{cur+=c;}}out.push(cur);return out.map(s=>s.trim());};const headersRaw=splitLine(lines[0]).map(h=>h.replace(/^"|"$/g,''));const headers=headersRaw.map(h=>h.toLowerCase());const rows=lines.slice(1).map(line=>{const cells=splitLine(line).map(v=>v.replace(/^"|"$/g,''));const obj={};headers.forEach((h,i)=>obj[h]=cells[i]||'');return obj;}).filter(r=>Object.values(r).some(v=>String(v).trim()));return { headers, rows };};
+const parseXlsx = async (file)=>{const data = await file.arrayBuffer(); const wb = XLSX.read(data, { type:'array' }); const ws = wb.Sheets[wb.SheetNames[0]]; const aoa = XLSX.utils.sheet_to_json(ws, { header:1, raw:false }); if(!aoa.length) return { headers:[], rows:[] }; const headers = aoa[0].map(h=>String(h||'').toLowerCase()); const rows = aoa.slice(1).map(r=>{const obj={}; headers.forEach((h,i)=> obj[h]=String(r[i]??'').trim()); return obj; }).filter(r=>Object.values(r).some(v=>String(v).trim())); return { headers, rows }; };
 const levenshtein=(a,b)=>{const r=b.length+1,c=a.length+1,m=Array.from({length:r},(_,i)=>Array(c).fill(0));for(let i=0;i<r;i++)m[i][0]=i;for(let j=0;j<c;j++)m[0][j]=j;for(let i=1;i<r;i++){for(let j=1;j<c;j++){if(b[i-1]===a[j-1])m[i][j]=m[i-1][j-1];else m[i][j]=Math.min(m[i-1][j-1]+1,m[i][j-1]+1,m[i-1][j]+1);}}return m[r-1][c-1]};
 const extractKeywords = text => normalize(text).split(' ').filter(w=>w.length>2 && !new Set(['the','and','or','but','in','on','at','to','for','of','with','by','a','an']).has(w));
 const categoryLibraries={
@@ -36,12 +37,12 @@ const App = () => {
   const [tariffCache, setTariffCache] = useState([]); // {desc, hsCode, kw}
   const [invIndex, setInvIndex] = useState(new Map()); // term -> Set of tariff idx
 
-  const onInventoryFile = (e)=>{const f=e.target.files?.[0]; if(!f) return; const reader=new FileReader(); reader.onload=(ev)=>{const txt=String(ev.target.result||''); const { headers, rows } = parseCsv(txt); const findCol=(patterns)=> headers.find(h=>patterns.some(p=>h.includes(p))) || ''; const detected = findCol(['name','product','item','title','description','inventory','desc']); if(!detected){ alert('Could not detect item name column in Inventory CSV. Please include a name/product/item column.'); setInventory([]); setInventoryDebug({ headers, mapping:{ name:'' }, count: 0 }); setNameKey(''); return; } setNameKey(detected); setInventory(rows); setInventoryDebug({ headers, mapping:{ name: detected }, count: rows.length });}; reader.readAsText(f);};
-  const onTariffFile = (e)=>{const f=e.target.files?.[0]; if(!f) return; const reader=new FileReader(); reader.onload=(ev)=>{const txt=String(ev.target.result||''); const { headers, rows } = parseCsv(txt);
-    const findCol=(patterns)=>{const idx=headers.findIndex(h=>patterns.some(p=>h.includes(p)));return idx};
-    const descIdx = findCol(['description','product','commodity','item','goods','desc']);
-    const hsIdx = findCol(['hs','code','tariff','classification']);
-    if(descIdx===-1 || hsIdx===-1){ alert('Could not detect required columns in Tariff CSV. Please ensure it has Description and HS Code columns.'); setTariff([]); setTariffDebug({ headers, mapping:{ description:'', hsCode:'' }, count:0 }); return; }
+  const onInventoryFile = async (e)=>{const f=e.target.files?.[0]; if(!f) return; const ext = (f.name.split('.').pop()||'').toLowerCase(); let parsed={ headers:[], rows:[] }; if(ext==='xlsx' || ext==='xls'){ parsed = await parseXlsx(f); } else { const txt = await f.text(); parsed = parseCsv(txt); } const { headers, rows } = parsed; const findCol=(patterns)=> headers.find(h=>patterns.some(p=>h.includes(p))) || ''; const detected = findCol(['name','product','item','title','description','inventory','desc']); if(!detected){ alert('Could not detect item name column in Inventory file. Please include a name/product/item column.'); setInventory([]); setInventoryDebug({ headers, mapping:{ name:'' }, count: 0 }); setNameKey(''); return; } setNameKey(detected); setInventory(rows); setInventoryDebug({ headers, mapping:{ name: detected }, count: rows.length }); };
+  const onTariffFile = async (e)=>{const f=e.target.files?.[0]; if(!f) return; const ext = (f.name.split('.').pop()||'').toLowerCase(); let parsed={ headers:[], rows:[] }; if(ext==='xlsx' || ext==='xls'){ parsed = await parseXlsx(f); } else { const txt = await f.text(); parsed = parseCsv(txt); } const { headers, rows } = parsed;
+    const findColIdx=(patterns)=> headers.findIndex(h=>patterns.some(p=>h.includes(p)));
+    const descIdx = findColIdx(['description','product','commodity','item','goods','desc']);
+    const hsIdx = findColIdx(['hs','code','tariff','classification']);
+    if(descIdx===-1 || hsIdx===-1){ alert('Could not detect required columns in Tariff file. Please ensure it has Description and HS Code columns.'); setTariff([]); setTariffDebug({ headers, mapping:{ description:'', hsCode:'' }, count:0 }); return; }
     const headersArr = headers;
     const descKey = headersArr[descIdx];
     const hsKey = headersArr[hsIdx];
@@ -111,6 +112,15 @@ const App = () => {
     const csv=[header,...rows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
     const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download='matching_results.csv'; a.click(); URL.revokeObjectURL(url);
   };
+  const exportXlsx = ()=>{
+    const header=['Inventory Name','Matched Description','HS Code','Score','Status'];
+    const rows=matches.map(m=>[((nameKey && m.inventory[nameKey])||m.inventory.name||m.inventory.product_name||m.inventory.item_name||''), m.match?.description||'No match found', m.match?.hsCode||'', m.match?`${(m.match.score*100).toFixed(1)}%`:'0%', m.status]);
+    const aoa=[header, ...rows];
+    const ws=XLSX.utils.aoa_to_sheet(aoa);
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Results');
+    XLSX.writeFile(wb, 'matching_results.xlsx');
+  };
 
   const ready = tariff.length>0 && inventory.length>0;
 
@@ -146,7 +156,12 @@ const App = () => {
               <span className='text-sm text-gray-600'>{(minScore*100).toFixed(0)}%</span>
             </div>
             <button onClick={onStart} disabled={!ready||processing} className={`px-6 py-2 rounded text-white ${ready&&!processing?'bg-blue-600 hover:bg-blue-700':'bg-gray-400 cursor-not-allowed'}`}>{processing?`Processing ${progress.current}/${progress.total}...`:'Start Matching'}</button>
-            {matches.length>0 && (<button onClick={exportCsv} className='px-6 py-2 rounded text-white bg-indigo-600 hover:bg-indigo-700'>Export Results</button>)}
+            {matches.length>0 && (
+              <div className='flex gap-2'>
+                <button onClick={exportCsv} className='px-6 py-2 rounded text-white bg-indigo-600 hover:bg-indigo-700'>Export CSV</button>
+                <button onClick={exportXlsx} className='px-6 py-2 rounded text-white bg-emerald-600 hover:bg-emerald-700'>Export XLSX</button>
+              </div>
+            )}
           </div>
         </div>
 
