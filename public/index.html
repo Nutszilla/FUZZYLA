@@ -7,6 +7,13 @@ const parseCsv = (text)=>{const lines=text.split(/\r?\n/).filter(l=>l.trim());if
 const parseXlsx = async (file)=>{const data = await file.arrayBuffer(); const wb = XLSX.read(data, { type:'array' }); const ws = wb.Sheets[wb.SheetNames[0]]; const aoa = XLSX.utils.sheet_to_json(ws, { header:1, raw:false }); if(!aoa.length) return { headers:[], rows:[] }; const headers = aoa[0].map(h=>String(h||'').toLowerCase()); const rows = aoa.slice(1).map(r=>{const obj={}; headers.forEach((h,i)=> obj[h]=String(r[i]??'').trim()); return obj; }).filter(r=>Object.values(r).some(v=>String(v).trim())); return { headers, rows }; };
 const levenshtein=(a,b)=>{const r=b.length+1,c=a.length+1,m=Array.from({length:r},(_,i)=>Array(c).fill(0));for(let i=0;i<r;i++)m[i][0]=i;for(let j=0;j<c;j++)m[0][j]=j;for(let i=1;i<r;i++){for(let j=1;j<c;j++){if(b[i-1]===a[j-1])m[i][j]=m[i-1][j-1];else m[i][j]=Math.min(m[i-1][j-1]+1,m[i][j-1]+1,m[i-1][j]+1);}}return m[r-1][c-1]};
 const extractKeywords = text => normalize(text).split(' ').filter(w=>w.length>2 && !new Set(['the','and','or','but','in','on','at','to','for','of','with','by','a','an']).has(w));
+// Processing/state lexicon for finer differentiation
+const stateTerms = ['fresh','frozen','chilled','dried','dry','powder','powdered','flakes','flaked','raw','cooked','preserved','canned','salted','smoked','pickled','roasted','ground'];
+const detectStates = (tokens)=>{
+  const set=new Set();
+  tokens.forEach(t=>{ if(stateTerms.includes(t)) set.add(t); });
+  return set;
+};
 const categoryLibraries={
   fish:['fish','salmon','tuna','cod','mackerel','sardine','herring','trout','bass','tilapia','catfish','halibut','snapper','grouper','swordfish','anchovy','carp','perch','pike','seafood','fillet','haddock','pollock','mahi','sole','flounder','mullet'],
   shellfish:['shrimp','prawn','lobster','crab','crayfish','oyster','mussel','clam','scallop','squid','octopus','shellfish','crustacean','mollusc'],
@@ -21,7 +28,38 @@ const categoryLibraries={
   beverages:['wine','beer','spirits','juice','coffee','tea','soda','beverage','drink','water','whiskey','vodka','rum','gin','brandy']
 };
 const checkCategoryMatch=(keywords)=>{const set=new Set();for(const [cat,terms] of Object.entries(categoryLibraries)){for(const kw of keywords){const k=kw.toLowerCase();if(terms.some(t=>{const tt=t.toLowerCase();const d=levenshtein(k,tt);const max=Math.max(k.length,tt.length)||1;return k.includes(tt)||tt.includes(k)||(d/max<=0.3)||d<=2;})){set.add(cat);break;}}}return Array.from(set)};
-const calcKeywordScore=(invKw, tarKw, invCats)=>{if(!invKw.length||!tarKw.length) return 0;let exact=0, partial=0;const tarCats=checkCategoryMatch(tarKw);const overlap=invCats.filter(c=>tarCats.includes(c)).length;const bonus=overlap*0.3;for(const iw of invKw){let best=0;for(const tw of tarKw){if(iw===tw) best=Math.max(best,1); else if(iw.includes(tw)||tw.includes(iw)) best=Math.max(best,0.5); else {const d=levenshtein(iw,tw);const max=Math.max(iw.length,tw.length);if(max>0 && d/max<=0.3) best=Math.max(best,0.7);} } if(best>=1) exact++; else if(best>0) partial+=best;}const base=(exact+partial)/Math.max(invKw.length, tarKw.length);return Math.min(1, base+bonus)};
+const calcKeywordScore=(invKw, tarKw, invCats)=>{
+  if(!invKw.length||!tarKw.length) return 0;
+  let exact=0, partial=0, contributingTerms=0;
+  const tarCats=checkCategoryMatch(tarKw);
+  const overlap=invCats.filter(c=>tarCats.includes(c)).length;
+  const catBonus=overlap*0.25; // modest category bonus
+  for(const iw of invKw){
+    let best=0;
+    for(const tw of tarKw){
+      if(iw===tw) best=Math.max(best,1);
+      else if(iw.includes(tw)||tw.includes(iw)) best=Math.max(best,0.5);
+      else {const d=levenshtein(iw,tw);const max=Math.max(iw.length,tw.length); if(max>0 && d/max<=0.3) best=Math.max(best,0.7);} 
+    }
+    if(best>0){ contributingTerms++; }
+    if(best>=1) exact++; else if(best>0) partial+=best;
+  }
+  // State/processing boosts and conflicts
+  const invStates = detectStates(invKw);
+  const tarStates = detectStates(tarKw);
+  let stateBonus = 0; let statePenalty = 0;
+  invStates.forEach(s=>{ if(tarStates.has(s)) stateBonus += 0.2; });
+  if(invStates.size>0){
+    const anyConflict = Array.from(invStates).some(s=>!tarStates.has(s));
+    if(anyConflict && tarStates.size>0) statePenalty += 0.2; // prefer exact state matches
+  }
+  const base=(exact+partial)/Math.max(invKw.length, tarKw.length);
+  let score = Math.min(1, base + catBonus + stateBonus - statePenalty);
+  // Guardrail: suppress weak, single-term matches unless string similarity is strong (handled later)
+  const coverage = contributingTerms/Math.max(invKw.length,1);
+  if(contributingTerms<2 && coverage<0.3){ score = Math.min(score, 0.49); }
+  return score;
+};
 const calcStringScore=(a,b)=>{const A=normalize(a),B=normalize(b);if(!A||!B) return 0; if(A===B) return 1; const d=levenshtein(A,B);const max=Math.max(A.length,B.length);return 1-(d/max)};
 
 const App = () => {
@@ -79,7 +117,9 @@ const App = () => {
       const tarKw = t.kw;
       const kScore = calcKeywordScore(invKw, tarKw, invCats);
       const sScore = calcStringScore(name, t.desc);
-      const score = kScore*0.7 + sScore*0.3;
+      // If keyword evidence is very weak (guarded to <=0.49), require stronger string similarity
+      let score = kScore*0.7 + sScore*0.3;
+      if(kScore<0.5 && sScore<0.55){ score = Math.min(score, 0.5); }
       if(score>bestScore && score>=minScore){ bestScore=score; best={ description: t.desc, hsCode: t.hsCode || '', score }; }
     }
     return best;
