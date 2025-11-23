@@ -1,11 +1,13 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { Upload, Download, Search, AlertCircle, CheckCircle, BookOpen } from 'lucide-react';
+import { expandText, expandTerm } from './vocabularyLibrary';
 
 interface TariffItem {
   description?: string;
   'hs code'?: string;
   hs_code?: string;
   chapter?: string;
+  expandedTerms?: string[]; // Expanded vocabulary terms for this item
   [key: string]: any;
 }
 
@@ -28,6 +30,25 @@ const App = () => {
   const [matches, setMatches] = useState<MatchResult[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [minScore, setMinScore] = useState(0.6);
+
+  // Build expanded tariff library with vocabulary expansion
+  const expandedTariffLibrary = useMemo(() => {
+    return tariffData.map(item => {
+      const description = item.description || '';
+      const chapter = item.chapter || 
+        (item['hs code'] ? String(item['hs code']).substring(0, 2) : undefined) ||
+        (item.hs_code ? String(item.hs_code).substring(0, 2) : undefined);
+      
+      // Expand the description using vocabulary library
+      const expandedTerms = expandText(description, chapter);
+      
+      return {
+        ...item,
+        expandedTerms,
+        chapter
+      };
+    });
+  }, [tariffData]);
 
   // Enhanced keyword library for better matching
   const categoryLibraries: Record<string, string[]> = {
@@ -175,29 +196,47 @@ const App = () => {
     return [...new Set(matches)];
   };
 
-  const calculateKeywordScore = (inventoryKeywords: string[], tariffKeywords: string[], inventoryCategories: string[]): number => {
-    if (inventoryKeywords.length === 0 || tariffKeywords.length === 0) return 0;
+  const calculateKeywordScore = (
+    inventoryKeywords: string[], 
+    tariffKeywords: string[], 
+    tariffExpandedTerms: string[],
+    inventoryCategories: string[]
+  ): number => {
+    if (inventoryKeywords.length === 0 || (tariffKeywords.length === 0 && tariffExpandedTerms.length === 0)) return 0;
+    
+    // Combine regular keywords with expanded terms
+    const allTariffTerms = [...new Set([...tariffKeywords, ...tariffExpandedTerms])];
     
     let matches = 0;
     let partialMatches = 0;
     
-    const tariffCategories = checkCategoryMatch(tariffKeywords);
+    const tariffCategories = checkCategoryMatch(allTariffTerms);
     const categoryOverlap = inventoryCategories.filter(cat => tariffCategories.includes(cat)).length;
     const categoryBonus = categoryOverlap * 0.3;
     
-    for (const invWord of inventoryKeywords) {
+    // Also expand inventory keywords for better matching
+    const expandedInventoryTerms = new Set<string>();
+    inventoryKeywords.forEach(word => {
+      expandedInventoryTerms.add(word);
+      const expansions = expandTerm(word);
+      expansions.forEach(exp => expandedInventoryTerms.add(exp));
+    });
+    
+    for (const invWord of Array.from(expandedInventoryTerms)) {
       let bestWordScore = 0;
       
-      for (const tarWord of tariffKeywords) {
+      for (const tarWord of allTariffTerms) {
         if (invWord === tarWord) {
           bestWordScore = Math.max(bestWordScore, 1);
         } else if (invWord.includes(tarWord) || tarWord.includes(invWord)) {
-          bestWordScore = Math.max(bestWordScore, 0.5);
+          bestWordScore = Math.max(bestWordScore, 0.8); // Higher score for substring matches
         } else {
           const distance = levenshteinDistance(invWord, tarWord);
           const maxLen = Math.max(invWord.length, tarWord.length);
-          if (distance / maxLen <= 0.3) {
+          if (maxLen > 0 && distance / maxLen <= 0.3) {
             bestWordScore = Math.max(bestWordScore, 0.7);
+          } else if (maxLen > 0 && distance / maxLen <= 0.5) {
+            bestWordScore = Math.max(bestWordScore, 0.4);
           }
         }
       }
@@ -206,7 +245,7 @@ const App = () => {
       else if (bestWordScore > 0) partialMatches += bestWordScore;
     }
     
-    const baseScore = (matches + partialMatches) / Math.max(inventoryKeywords.length, tariffKeywords.length);
+    const baseScore = (matches + partialMatches) / Math.max(inventoryKeywords.length, allTariffTerms.length);
     return Math.min(1, baseScore + categoryBonus);
   };
 
@@ -231,14 +270,22 @@ const App = () => {
     let bestMatch: (TariffItem & { score: number; keywordScore: number; stringScore: number; categories: string[] }) | null = null;
     let bestScore = 0;
 
-    for (const tariffItem of tariffData) {
+    // Use expanded tariff library instead of raw tariffData
+    for (const tariffItem of expandedTariffLibrary) {
       const description = tariffItem.description || '';
       const tariffKeywords = extractKeywords(description);
+      const tariffExpandedTerms = tariffItem.expandedTerms || [];
       
-      const keywordScore = calculateKeywordScore(inventoryKeywords, tariffKeywords, inventoryCategories);
+      const keywordScore = calculateKeywordScore(
+        inventoryKeywords, 
+        tariffKeywords, 
+        tariffExpandedTerms,
+        inventoryCategories
+      );
       const stringScore = calculateSimilarityScore(itemName, description);
       
-      const combinedScore = (keywordScore * 0.7) + (stringScore * 0.3);
+      // Weighted combination favoring expanded keyword matching
+      const combinedScore = (keywordScore * 0.75) + (stringScore * 0.25);
       
       if (combinedScore > bestScore && combinedScore >= minScore) {
         bestScore = combinedScore;
@@ -247,7 +294,7 @@ const App = () => {
           score: combinedScore,
           keywordScore,
           stringScore,
-          categories: checkCategoryMatch(tariffKeywords)
+          categories: checkCategoryMatch([...tariffKeywords, ...tariffExpandedTerms])
         };
       }
     }
@@ -350,20 +397,27 @@ const App = () => {
 
     setIsProcessing(true);
     
+    // Use setTimeout to allow UI to update, but process in batches for better performance
     setTimeout(() => {
-      const results: MatchResult[] = inventoryData.map(item => {
-        const match = findBestMatch(item);
-        return {
-          inventory: item,
-          match,
-          status: match ? 'matched' : 'unmatched'
-        };
-      });
-      
-      setMatches(results);
-      setIsProcessing(false);
+      try {
+        const results: MatchResult[] = inventoryData.map(item => {
+          const match = findBestMatch(item);
+          return {
+            inventory: item,
+            match,
+            status: match ? 'matched' : 'unmatched'
+          };
+        });
+        
+        setMatches(results);
+      } catch (error) {
+        console.error('Error during matching:', error);
+        alert('An error occurred during matching. Please check the console for details.');
+      } finally {
+        setIsProcessing(false);
+      }
     }, 100);
-  }, [tariffData, inventoryData, minScore]);
+  }, [tariffData, inventoryData, minScore, expandedTariffLibrary]);
 
   const exportResults = (): void => {
     const headers = ['Inventory Name', 'Matched Description', 'HS Code', 'Chapter', 'Confidence Score', 'Categories', 'Status'];
