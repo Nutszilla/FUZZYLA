@@ -1,35 +1,13 @@
-<!DOCTYPE html><html><head><title>Food HS Classifier</title><meta charset='utf-8'/><meta name='viewport' content='width=device-width, initial-scale=1'/><script src='https://unpkg.com/react@18/umd/react.development.js'></script><script src='https://unpkg.com/react-dom@18/umd/react-dom.development.js'></script><script src='https://unpkg.com/@babel/standalone/babel.min.js'></script><script src='https://cdn.tailwindcss.com'></script></head><body><div id='root'></div><script type='text/babel'>const { useState, useEffect } = React;
-
-function parseCsv(text){const lines=text.split(/\r?\n/).filter(l=>l.trim());if(lines.length===0) return [];const headers=lines[0].split(',').map(h=>h.trim().replace(/^"|"$/g,''));return lines.slice(1).map(line=>{const cells=[];let cur='';let q=false;for(let i=0;i<line.length;i++){const c=line[i];if(c==='"'){if(q && line[i+1]==='"'){cur+='"';i++;}else{q=!q;}}else if(c===',' && !q){cells.push(cur);cur='';}else{cur+=c;}}cells.push(cur);const obj={};headers.forEach((h,idx)=>obj[h.toLowerCase()]=(cells[idx]||'').trim());return obj;}).filter(o=>Object.values(o).some(v=>String(v).trim()));}
-
-const App = () => {
-  const [tariff, setTariff] = useState([]);
-  const [inventory, setInventory] = useState([]);
-  const [ready, setReady] = useState(false);
-
-  useEffect(()=>{fetch('/tariff.json').then(r=>r.json()).then(setTariff).catch(()=>setTariff([]));},[]);
-  useEffect(()=>{setReady(tariff.length>0 && inventory.length>0);},[tariff,inventory]);
-
-  const onInventoryFile = (e)=>{const f=e.target.files?.[0]; if(!f) return; const reader=new FileReader(); reader.onload=(ev)=>{const txt=String(ev.target.result||''); setInventory(parseCsv(txt));}; reader.readAsText(f);};
-
-  const onStart=()=>{if(!ready) return; alert(`Ready: ${inventory.length} items vs ${tariff.length} tariff rows`); /* TODO: run matching and show results */ };
-
-  return (
-    <div className='min-h-screen bg-gray-50 p-6'>
-      <div className='max-w-4xl mx-auto'>
-        <div className='bg-white rounded-lg shadow-lg p-6'>
-          <h1 className='text-3xl font-bold text-gray-800 mb-2'>Food HS Code Classifier</h1>
-          <p className='text-gray-600'>Upload inventory CSV only; tariff data loads automatically.</p>
-          <div className='mt-6 space-y-3'>
-            <div className='text-sm text-gray-600'>Tariff data: {tariff.length>0?`loaded ${tariff.length} rows`:'loading...'}</div>
-            <input type='file' accept='.csv' className='mb-2' onChange={onInventoryFile} />
-            <button disabled={!ready} onClick={onStart} className={`px-6 py-2 rounded text-white ${ready?'bg-blue-600 hover:bg-blue-700':'bg-gray-400 cursor-not-allowed'}`}>Start Classification</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-ReactDOM.render(<App />, document.getElementById('root'));
-</script></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Food HS Classifier</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
