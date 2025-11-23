@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { Upload, Download, Search, AlertCircle, CheckCircle, BookOpen } from 'lucide-react';
 import { expandText, expandTerm } from './vocabularyLibrary';
 
@@ -30,24 +30,42 @@ const App = () => {
   const [matches, setMatches] = useState<MatchResult[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [minScore, setMinScore] = useState(0.6);
+  const [error, setError] = useState<string | null>(null);
+
+  // Verify app loaded
+  useEffect(() => {
+    console.log('App component mounted');
+  }, []);
 
   // Build expanded tariff library with vocabulary expansion
   const expandedTariffLibrary = useMemo(() => {
-    return tariffData.map(item => {
-      const description = item.description || '';
-      const chapter = item.chapter || 
-        (item['hs code'] ? String(item['hs code']).substring(0, 2) : undefined) ||
-        (item.hs_code ? String(item.hs_code).substring(0, 2) : undefined);
-      
-      // Expand the description using vocabulary library
-      const expandedTerms = expandText(description, chapter);
-      
-      return {
-        ...item,
-        expandedTerms,
-        chapter
-      };
-    });
+    try {
+      return tariffData.map(item => {
+        const description = item.description || '';
+        const chapter = item.chapter || 
+          (item['hs code'] ? String(item['hs code']).substring(0, 2) : undefined) ||
+          (item.hs_code ? String(item.hs_code).substring(0, 2) : undefined);
+        
+        // Expand the description using vocabulary library
+        let expandedTerms: string[] = [];
+        try {
+          expandedTerms = expandText(description, chapter);
+        } catch (err) {
+          console.warn('Error expanding terms for item:', item, err);
+          expandedTerms = [];
+        }
+        
+        return {
+          ...item,
+          expandedTerms,
+          chapter
+        };
+      });
+    } catch (err) {
+      console.error('Error building expanded tariff library:', err);
+      setError('Error processing tariff data');
+      return [];
+    }
   }, [tariffData]);
 
   // Enhanced keyword library for better matching
@@ -444,6 +462,25 @@ const App = () => {
     a.click();
     window.URL.revokeObjectURL(url);
   };
+
+  // Show error if any
+  if (error) {
+    return (
+      <div className="min-h-screen bg-red-50 p-6 flex items-center justify-center">
+        <div className="bg-white rounded-lg shadow-xl p-6 max-w-md">
+          <h1 className="text-2xl font-bold text-red-600 mb-4">Error</h1>
+          <p className="text-gray-700">{error}</p>
+          <button 
+            onClick={() => setError(null)}
+            className="mt-4 bg-indigo-500 text-white px-4 py-2 rounded hover:bg-indigo-600"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    );
+  }
+
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
